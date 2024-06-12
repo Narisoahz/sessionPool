@@ -8,6 +8,7 @@
 ## 代码目录
 ```
 sessionPool
+├── framework.png 架构图
 ├── README.md
 └── src
     ├── consumer.go 消费者代码
