@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/gomodule/redigo/redis"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,9 +25,11 @@ func init() {
 }
 
 func main() {
-	//初始化sessionPool
-	initialPool()
-
+	err := checkSessionPool()
+	if err != nil {
+		fmt.Println("Error", err)
+		return
+	}
 	//创建限流通道
 	limitGet := make(chan struct{}, 3)
 	limitReturn := make(chan struct{}, 3)
@@ -63,6 +66,36 @@ func main() {
 	wg.Wait()
 	pool.Close()
 }
+func checkSessionPool() error {
+	//防止panic退出
+	conn := pool.Get()
+	defer conn.Close()
+	//判断redis中是否还有seesion存在
+	idList, err := redis.Strings(conn.Do("KEYS", "sessionId_*"))
+	if err != nil {
+		return err
+	}
+	remain_num := len(idList)
+	if remain_num == 0 {
+		//重新初始化sessionPool
+		initialPool()
+	} else {
+		//删除掉原来的list
+		_, err := conn.Do("DEL", "session_pool")
+		if err != nil {
+			return err
+		}
+		//恢复list
+		for _, id := range idList {
+			trimId := strings.TrimPrefix(id, "sessionId_")
+			_, err1 := conn.Do("RPUSH", "session_pool", trimId)
+			if err1 != nil {
+				return err1
+			}
+		}
+	}
+	return nil
+}
 
 // 获取队首的Session（没过期且没达到最大使用次数）
 func getSession() (*Session, error) {
@@ -80,7 +113,8 @@ func getSession() (*Session, error) {
 		//list中没有session的情况
 		if sessionIDTemp == nil {
 			//判断redis中是否还有seesion存在
-			remain_num, _ := redis.Int(conn.Do("KEYs", "sessionId_*"))
+			idList, _ := redis.Strings(conn.Do("KEYs", "sessionId_*"))
+			remain_num := len(idList)
 			if remain_num == 0 {
 				//全部session都过期了
 				return nil, errors.New("no session remain")
